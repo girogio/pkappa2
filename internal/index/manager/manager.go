@@ -2124,39 +2124,102 @@ func writePcaps(pcapDir string, packets []pcapOverIPPacket) ([]string, error) {
 	return filenames, nil
 }
 
+// pcapSpool keeps incoming captures on disk while an import is in progress.
+// Each link type needs its own pcapng file header.
+type pcapSpool struct {
+	dir   string
+	files map[layers.LinkType]*pcapSpoolFile
+}
+
+type pcapSpoolFile struct {
+	file     *os.File
+	writer   *pcapgo.NgWriter
+	filename string
+}
+
+func (s *pcapSpool) add(packet pcapOverIPPacket) error {
+	if s.files == nil {
+		s.files = make(map[layers.LinkType]*pcapSpoolFile)
+	}
+	entry := s.files[packet.linkType]
+	if entry == nil {
+		filename := tools.MakeFilename("", "pcap")
+		file, err := os.Create(filepath.Join(s.dir, filename))
+		if err != nil {
+			return err
+		}
+		writer, err := pcapgo.NewNgWriter(file, packet.linkType)
+		if err != nil {
+			file.Close()
+			os.Remove(filepath.Join(s.dir, filename))
+			return err
+		}
+		entry = &pcapSpoolFile{file: file, writer: writer, filename: filename}
+		s.files[packet.linkType] = entry
+	}
+	return entry.writer.WritePacket(packet.ci, packet.data)
+}
+
+func (s *pcapSpool) flush() ([]string, error) {
+	filenames := make([]string, 0, len(s.files))
+	var result error
+	for linkType, entry := range s.files {
+		delete(s.files, linkType)
+		flushErr := entry.writer.Flush()
+		closeErr := entry.file.Close()
+		if err := errors.Join(flushErr, closeErr); err != nil {
+			result = errors.Join(result, fmt.Errorf("closing %s: %w", entry.filename, err))
+			os.Remove(filepath.Join(s.dir, entry.filename))
+			continue
+		}
+		filenames = append(filenames, entry.filename)
+	}
+	return filenames, result
+}
+
 func (mgr *Manager) pcapOverIPPacketHandler() {
-	packets := []pcapOverIPPacket(nil)
+	spool := pcapSpool{dir: mgr.PcapDir}
 	queue := false
 	for {
 		select {
 		case packet := <-mgr.pcapOverIPPackets:
-			packets = append(packets, packet)
-			if queue {
+			if !queue {
+				// Start the first import immediately. Subsequent packets are
+				// spooled until the importer asks for the next batch.
+				filenames, err := writePcaps(mgr.PcapDir, []pcapOverIPPacket{packet})
+				if err != nil {
+					log.Printf("error writing PCAP-over-IP packet: %v", err)
+					continue
+				}
+				queue = true
+				go mgr.ImportPcaps(filenames)
 				continue
 			}
-			queue = true
+			if err := spool.add(packet); err != nil {
+				log.Printf("error spooling PCAP-over-IP packet: %v", err)
+			}
 
 		case cmd := <-mgr.pcapOverIPCmd:
 			switch cmd {
 			case pcapOverIPCmdClose:
+				if _, err := spool.flush(); err != nil {
+					log.Printf("error closing PCAP-over-IP spool: %v", err)
+				}
 				return
 			case pcapOverIPCmdFlush:
-				if len(packets) == 0 {
+				if len(spool.files) == 0 {
 					queue = false
 					continue
 				}
 			}
-		}
-		go func(packets []pcapOverIPPacket) {
-			filenames, err := writePcaps(mgr.PcapDir, packets)
+			filenames, err := spool.flush()
 			if err != nil {
-				log.Printf("error writing PCAP-over-IP packets: %v", err)
+				log.Printf("error closing PCAP-over-IP spool: %v", err)
 			}
 			if len(filenames) != 0 {
-				mgr.ImportPcaps(filenames)
+				go mgr.ImportPcaps(filenames)
 			}
-		}(packets)
-		packets = nil
+		}
 	}
 }
 

@@ -65,7 +65,7 @@ func loadSnapshots(filename string) ([]*snapshot, error) {
 			}
 			ss.referencedPackets[string(fn[:header.FilenameLength])] = referencedPackets
 		}
-		snapshots = append(snapshots, &ss)
+		snapshots = compactSnapshots(append(snapshots, &ss))
 	}
 	return snapshots, nil
 }
@@ -114,16 +114,26 @@ func saveSnapshots(filename string, snapshots []*snapshot) error {
 }
 
 func compactSnapshots(snapshots []*snapshot) []*snapshot {
-	return snapshots
-	// for i := len(snapshots) - 3; i >= 0; i -= 2 {
-	// 	a, b, c := snapshots[i], snapshots[i+1], snapshots[i+2]
-	// 	aChunks, bChunks, cChunks := a.chunkCount, b.chunkCount, c.chunkCount
-	// 	if aChunks > bChunks || bChunks > cChunks {
-	// 		break
-	// 	}
-	// 	b.chunkCount += a.chunkCount
-	// 	//remove a
-	// 	snapshots = append(snapshots[:i], snapshots[i+1:]...)
-	// }
-	// return snapshots
+	// Keep the oldest and newest of each three equally sized checkpoints.
+	// The removed checkpoint's coverage moves to the newest one, preserving
+	// the total chunk count used to select a snapshot file at startup.
+	for {
+		seen := make(map[uint64][]int)
+		middle, newest := -1, -1
+		for i, s := range snapshots {
+			indices := append(seen[s.chunkCount], i)
+			if len(indices) == 3 {
+				middle, newest = indices[1], indices[2]
+				break
+			}
+			seen[s.chunkCount] = indices
+		}
+		if middle == -1 {
+			return snapshots
+		}
+		snapshots[newest].chunkCount += snapshots[middle].chunkCount
+		copy(snapshots[middle:], snapshots[middle+1:])
+		snapshots[len(snapshots)-1] = nil
+		snapshots = snapshots[:len(snapshots)-1]
+	}
 }
