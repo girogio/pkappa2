@@ -84,6 +84,13 @@ export type StreamData = {
   ActiveConverter: string;
 };
 
+export type AttackFlagMatches = {
+  Enabled: boolean;
+  Generation: number;
+  PollAfterMillis: number;
+  Matches: string[][] | null;
+};
+
 /** @see {isStatistics} ts-auto-guard:type-guard */
 export type Statistics = {
   IndexCount: number;
@@ -204,6 +211,33 @@ const APIClient = {
         converter,
       },
     );
+  },
+  async getAttackFlagMatches(
+    streamId: number,
+    converter: string,
+    generation: number | null,
+  ): Promise<AttackFlagMatches> {
+    const response = await this.perform(
+      "get",
+      `/attack-flags/stream/${streamId}.json`,
+      null,
+      generation === null ? { converter } : { converter, generation },
+    );
+    const data = response.data as AttackFlagMatches;
+    if (
+      typeof data?.Enabled !== "boolean" ||
+      typeof data.Generation !== "number" ||
+      typeof data.PollAfterMillis !== "number" ||
+      (data.Matches !== null &&
+        (!Array.isArray(data.Matches) ||
+          !data.Matches.every(
+            (ids) =>
+              Array.isArray(ids) && ids.every((id) => typeof id === "string"),
+          )))
+    ) {
+      throw new Error("Unexpected attack flag response");
+    }
+    return data;
   },
   async getStatus() {
     return this.performGuarded("get", `/status.json`, isStatistics);
