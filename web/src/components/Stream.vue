@@ -450,7 +450,7 @@ const streamData = ref<HTMLElement | null>(null);
 const urlDecode = ref(false);
 const cardsViewMode = ref("cards");
 const flagIDMatches = ref<string[][]>([]);
-const flagGeneration = ref<number | null>(null);
+const flagGeneration = ref<string | null>(null);
 let flagPollTimer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
 const hasAttackFlagMatches = computed(() =>
@@ -639,7 +639,7 @@ async function fetchAttackFlagMatches(id: number, selectedConverter: string) {
       return;
     flagGeneration.value = response.Generation;
     if (response.Matches !== null) flagIDMatches.value = response.Matches;
-    if (response.Enabled) {
+    if (response.PollAfterMillis > 0) {
       flagPollTimer = setTimeout(
         () => void fetchAttackFlagMatches(id, selectedConverter),
         Math.max(response.PollAfterMillis, 1000),
