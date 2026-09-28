@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"container/ring"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/gopacket/gopacket/pcap"
 	"github.com/gopacket/gopacket/pcapgo"
 	"github.com/gorilla/websocket"
+	"github.com/spq/pkappa2/internal/attackflags"
 	"github.com/spq/pkappa2/internal/index"
 	"github.com/spq/pkappa2/internal/index/manager"
 	"github.com/spq/pkappa2/internal/query"
@@ -58,10 +60,13 @@ var (
 
 	listenAddress = flag.String("address", ":8080", "Listen address")
 
-	startupCpuprofile = flag.String("startup_cpuprofile", "", "write cpu profile to file")
+	startupCpuprofile  = flag.String("startup_cpuprofile", "", "write cpu profile to file")
+	attackJSONURL      = flag.String("attack_json_url", "", "HTTP URL of a changing attack.json feed (empty disables flag ID highlighting)")
+	attackFlagIDsPath  = flag.String("attack_flag_ids_path", "flag_ids", "Dot-separated path to flag IDs in attack.json; * traverses arrays or objects")
+	attackTickDuration = flag.Duration("attack_tick_duration", 2*time.Minute, "Duration of an attack tick; the feed is checked twice per tick")
 )
 
-func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.RWMutex) *chi.Mux {
+func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.RWMutex, attackFeed *attackflags.Feed) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.SetHeader("Access-Control-Allow-Origin", "*"))
 	r.Use(middleware.SetHeader("Access-Control-Allow-Methods", "*"))
@@ -442,21 +447,10 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 			http.Error(w, fmt.Sprintf("AllConverters() failed: %v", err), http.StatusInternalServerError)
 			return
 		}
-		switch converter {
-		case "auto":
-			if len(converters) == 1 {
-				converter = converters[0]
-			} else {
-				converter = ""
-			}
-		case "none":
-			converter = ""
-		default:
-			if !strings.HasPrefix(converter, "converter:") {
-				http.Error(w, fmt.Sprintf("invalid converter %q", converter), http.StatusBadRequest)
-				return
-			}
-			converter = converter[len("converter:"):]
+		converter, err = resolveConverter(converter, converters)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		data, err := streamContext.Data(converter)
 		if err != nil {
@@ -487,6 +481,70 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			http.Error(w, fmt.Sprintf("Encode failed: %v", err), http.StatusInternalServerError)
 			return
+		}
+	})
+	rUser.Get(`/api/attack-flags/stream/{stream:\d+}.json`, func(w http.ResponseWriter, r *http.Request) {
+		response := struct {
+			Enabled         bool
+			Generation      int
+			PollAfterMillis int64
+			Matches         [][]string
+		}{Enabled: attackFeed != nil}
+		if attackFeed == nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+			return
+		}
+		response.Generation = attackFeed.Generation()
+		response.PollAfterMillis = attackFeed.PollInterval().Milliseconds()
+		if r.URL.Query().Get("generation") == strconv.Itoa(response.Generation) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+			return
+		}
+		streamID, err := strconv.ParseUint(chi.URLParam(r, "stream"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid stream ID", http.StatusBadRequest)
+			return
+		}
+		v := mgr.GetView()
+		defer v.Release()
+		streamContext, err := v.Stream(streamID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if streamContext.Stream() == nil {
+			http.Error(w, "stream not found", http.StatusNotFound)
+			return
+		}
+		converters, err := streamContext.AllConverters()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		converter := r.URL.Query().Get("converter")
+		if converter == "" {
+			converter = "auto"
+		}
+		converter, err = resolveConverter(converter, converters)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		data, err := streamContext.Data(converter)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		response.Matches, err = attackFeed.Match(data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("encode attack flag matches: %v", err)
 		}
 	})
 	rUser.Post("/api/search.json", func(w http.ResponseWriter, r *http.Request) {
@@ -1001,6 +1059,23 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 	return r
 }
 
+func resolveConverter(requested string, converters []string) (string, error) {
+	switch requested {
+	case "auto":
+		if len(converters) == 1 {
+			return converters[0], nil
+		}
+		return "", nil
+	case "none":
+		return "", nil
+	default:
+		if !strings.HasPrefix(requested, "converter:") {
+			return "", fmt.Errorf("invalid converter %q", requested)
+		}
+		return strings.TrimPrefix(requested, "converter:"), nil
+	}
+}
+
 func main() {
 	// parse environment variables and if given, set as default values for flags
 	for _, env := range os.Environ() {
@@ -1051,6 +1126,21 @@ func main() {
 		log.Fatalf("manager.New failed: %v", err)
 	}
 	defer mgr.Close()
+	var attackFeed *attackflags.Feed
+	if *attackJSONURL != "" {
+		attackFeed, err = attackflags.New(attackflags.Config{
+			URL:          *attackJSONURL,
+			Path:         *attackFlagIDsPath,
+			TickDuration: *attackTickDuration,
+			StateDir:     filepath.Join(*baseDir, *stateDir),
+		})
+		if err != nil {
+			log.Fatalf("attack flag feed configuration: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go attackFeed.Run(ctx)
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -1096,7 +1186,7 @@ func main() {
 		}()
 	}
 
-	r := setupRouter(mgr, stderrRing, &stderrLock)
+	r := setupRouter(mgr, stderrRing, &stderrLock, attackFeed)
 
 	server := &http.Server{
 		Addr:    *listenAddress,

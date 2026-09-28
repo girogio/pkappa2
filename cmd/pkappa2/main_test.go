@@ -114,7 +114,7 @@ func TestConfig(t *testing.T) {
 	dirs := makeTempdirs(t)
 	mgr := makeManager(t, dirs)
 	defer mgr.Close()
-	r := setupRouter(mgr, nil, nil)
+	r := setupRouter(mgr, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	rr := httptest.NewRecorder()
@@ -152,7 +152,7 @@ func TestStatus(t *testing.T) {
 	dirs := makeTempdirs(t)
 	mgr := makeManager(t, dirs)
 	defer mgr.Close()
-	r := setupRouter(mgr, nil, nil)
+	r := setupRouter(mgr, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/status.json", nil)
 	rr := httptest.NewRecorder()
@@ -174,7 +174,7 @@ func TestWebsocket(t *testing.T) {
 	dirs := makeTempdirs(t)
 	mgr := makeManager(t, dirs)
 	defer mgr.Close()
-	r := setupRouter(mgr, nil, nil)
+	r := setupRouter(mgr, nil, nil, nil)
 	server := httptest.NewServer(r)
 	defer server.Close()
 

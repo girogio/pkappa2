@@ -365,6 +365,14 @@
             ></v-col
           >
         </v-row>
+        <v-row v-if="hasAttackFlagMatches" no-gutters>
+          <v-col cols="1" class="text-subtitle-2">Attack:</v-col>
+          <v-col cols="11">
+            <v-chip size="small" color="amber-darken-2" variant="flat">
+              Flag ID in packet data
+            </v-chip>
+          </v-col>
+        </v-row>
         <v-row dense>
           <v-tabs
             v-model="converterTab"
@@ -401,6 +409,7 @@
         :viewmode="cardsViewMode"
         :presentation="presentation"
         :highlight-matches="streams.result?.DataRegexes"
+        :flag-id-matches="flagIDMatches"
         :url-decode="urlDecode"
       ></StreamData>
     </div>
@@ -429,6 +438,7 @@ import { formatDate, formatDateLong, tagify } from "@/filters";
 import { getContrastTextColor } from "@/lib/colors";
 import prettyBytes from "pretty-bytes";
 import { CYBERCHEF_URL } from "@/lib/constants";
+import APIClient from "@/apiClient";
 
 const store = useRootStore();
 const route = useRoute();
@@ -439,6 +449,13 @@ const selectionQuery = ref("");
 const streamData = ref<HTMLElement | null>(null);
 const urlDecode = ref(false);
 const cardsViewMode = ref("cards");
+const flagIDMatches = ref<string[][]>([]);
+const flagGeneration = ref<number | null>(null);
+let flagPollTimer: ReturnType<typeof setTimeout> | null = null;
+let disposed = false;
+const hasAttackFlagMatches = computed(() =>
+  flagIDMatches.value.some((matches) => matches.length > 0),
+);
 
 if (localStorage.streamPresentation) {
   presentation.value = localStorage.getItem("streamPresentation") ?? "ascii";
@@ -592,6 +609,11 @@ onMounted(() => {
   });
 });
 
+onBeforeUnmount(() => {
+  disposed = true;
+  if (flagPollTimer !== null) clearTimeout(flagPollTimer);
+});
+
 function changeConverter(converter: unknown) {
   if (typeof converter !== "string") {
     console.warn("Invalid converter type:", converter);
@@ -602,12 +624,65 @@ function changeConverter(converter: unknown) {
   });
 }
 
+async function fetchAttackFlagMatches(id: number, selectedConverter: string) {
+  try {
+    const response = await APIClient.getAttackFlagMatches(
+      id,
+      selectedConverter,
+      flagGeneration.value,
+    );
+    if (
+      disposed ||
+      id !== streamId.value ||
+      selectedConverter !== requestedConverter()
+    )
+      return;
+    flagGeneration.value = response.Generation;
+    if (response.Matches !== null) flagIDMatches.value = response.Matches;
+    if (response.Enabled) {
+      flagPollTimer = setTimeout(
+        () => void fetchAttackFlagMatches(id, selectedConverter),
+        Math.max(response.PollAfterMillis, 1000),
+      );
+    }
+  } catch (err) {
+    console.error("Could not refresh attack flag IDs", err);
+    if (
+      !disposed &&
+      id === streamId.value &&
+      selectedConverter === requestedConverter()
+    ) {
+      flagPollTimer = setTimeout(
+        () => void fetchAttackFlagMatches(id, selectedConverter),
+        15000,
+      );
+    }
+  }
+}
+
+function requestedConverter() {
+  return (route.query.converter as string) ?? "auto";
+}
+
 function fetchStreamForId() {
+  if (flagPollTimer !== null) clearTimeout(flagPollTimer);
+  flagPollTimer = null;
+  flagGeneration.value = null;
+  flagIDMatches.value = [];
   stream.stream = null;
   if (streamId.value !== null) {
-    stream.fetchStream(streamId.value, converter.value).catch((err: Error) => {
-      EventBus.emit("showError", `Failed to fetch stream: ${err.message}`);
-    });
+    const id = streamId.value;
+    const selectedConverter = requestedConverter();
+    stream
+      .fetchStream(id, selectedConverter)
+      .then(() => {
+        if (stream.stream !== null && id === streamId.value) {
+          void fetchAttackFlagMatches(id, selectedConverter);
+        }
+      })
+      .catch((err: Error) => {
+        EventBus.emit("showError", `Failed to fetch stream: ${err.message}`);
+      });
     document.getSelection()?.empty();
   }
 }

@@ -33,6 +33,14 @@
         <v-col class="v-col-1">
           {{ formatChunkSize(chunk) }}
         </v-col>
+        <v-col v-if="flagIdMatches[index]?.length" class="v-col-2">
+          <v-chip
+            size="x-small"
+            color="amber-darken-2"
+            :title="flagIdMatches[index].join(', ')"
+            >Flag ID</v-chip
+          >
+        </v-col>
         <v-col>
           <v-btn-toggle
             v-model="chunk.Presentation"
@@ -140,7 +148,7 @@
             class="chunk"
             :data-chunk-idx="index"
             :class="[classes(chunk)]"
-            v-html="inlineAscii(chunk)"
+            v-html="inlineAscii(chunk, index)"
           >
           </span>
           <span
@@ -148,7 +156,7 @@
             class="chunk"
             :data-chunk-idx="index"
             :class="[classes(chunk)]"
-            v-html="inlineUnicode(chunk)"
+            v-html="inlineUnicode(chunk, index)"
           >
           </span>
           <pre
@@ -193,7 +201,7 @@
             class="chunk"
             :data-chunk-idx="index"
             :class="[classes(chunk)]"
-            v-html="inlineAscii(chunk)"
+            v-html="inlineAscii(chunk, index)"
           >
           </span>
         </template>
@@ -204,7 +212,7 @@
             class="chunk"
             :data-chunk-idx="index"
             :class="[classes(chunk)]"
-            v-html="inlineUnicode(chunk)"
+            v-html="inlineUnicode(chunk, index)"
           >
           </span>
         </template>
@@ -263,6 +271,11 @@ const props = defineProps({
     required: false,
     default: () => ({ Client: null, Server: null }),
   },
+  flagIdMatches: {
+    type: Array as PropType<string[][]>,
+    required: false,
+    default: () => [],
+  },
   urlDecode: {
     type: Boolean,
     required: false,
@@ -303,6 +316,16 @@ const data = ref(
     };
     return visualChunk;
   }),
+);
+
+watch(
+  () => props.data,
+  (chunks) => {
+    data.value = chunks.map((chunk) => ({
+      ...chunk,
+      Presentation: props.presentation,
+    }));
+  },
 );
 
 const getBgThemeColor = () => {
@@ -359,55 +382,79 @@ const handleHighlightMatches = (
   direction: number,
   chunkData: string,
   asciiEscaped: string[],
+  flagIDs: string[],
 ) => {
   const highlightMatchesRegex =
     direction === 0
       ? highlightMatchesClient.value
       : highlightMatchesServer.value;
+  const marks = new Uint8Array(chunkData.length);
   if (highlightMatchesRegex !== undefined) {
-    const highlights: number[][] = [];
     for (const regex of highlightMatchesRegex) {
       if (regex === undefined) continue;
       for (const match of chunkData.matchAll(regex)) {
-        highlights.push([match.index, match[0].length]);
+        for (let i = match.index; i < match.index + match[0].length; i++) {
+          marks[i] = 1;
+        }
       }
-    }
-    highlights.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    let highlightIndex = 0;
-    for (const [index, length] of highlights) {
-      asciiEscaped[index] =
-        `<span class="mark" data-offset="${index}">${asciiEscaped[index]}`;
-      if (highlightIndex > 0) {
-        asciiEscaped[index] = `</span>${asciiEscaped[index]}`;
-      }
-      asciiEscaped[index + length - 1] =
-        `${asciiEscaped[index + length - 1]}</span><span data-offset="${index + length}">`;
-      highlightIndex++;
-    }
-    if (highlightIndex > 0) {
-      asciiEscaped[asciiEscaped.length - 1] =
-        `${asciiEscaped[asciiEscaped.length - 1]}</span>`;
     }
   }
-
-  return asciiEscaped.join("");
+  for (const id of flagIDs) {
+    if (id === "") continue;
+    let from = 0;
+    while (from < chunkData.length) {
+      const at = chunkData.indexOf(id, from);
+      if (at < 0) break;
+      for (let i = at; i < at + id.length; i++) marks[i] = 2;
+      from = at + id.length;
+    }
+  }
+  const output: string[] = [];
+  let previous = -1;
+  for (let i = 0; i < asciiEscaped.length; i++) {
+    const current = marks[i];
+    if (current !== previous) {
+      if (previous !== -1) output.push("</span>");
+      const klass =
+        current === 2
+          ? ' class="flag-id"'
+          : current === 1
+            ? ' class="mark"'
+            : "";
+      output.push(`<span${klass} data-offset="${i}">`);
+      previous = current;
+    }
+    output.push(asciiEscaped[i]);
+  }
+  if (previous !== -1) output.push("</span>");
+  return output.join("");
 };
 
-const inlineUnicode = (chunk: Data) => {
+const inlineUnicode = (chunk: Data, index: number) => {
   const chunkData = handleUnicodeDecode(chunk, props.urlDecode);
   const asciiEscaped = chunkData.split("").map((c) => {
     const charCode = c.charCodeAt(0);
     return asciiMap[charCode] !== undefined ? asciiMap[charCode] : c;
   });
-  return handleHighlightMatches(chunk.Direction, chunkData, asciiEscaped);
+  return handleHighlightMatches(
+    chunk.Direction,
+    chunkData,
+    asciiEscaped,
+    props.flagIdMatches[index] ?? [],
+  );
 };
 
-const inlineAscii = (chunk: Data) => {
+const inlineAscii = (chunk: Data, index: number) => {
   const chunkData = tryURLDecodeIfEnabled(atob(chunk.Content), props.urlDecode);
   const asciiEscaped = chunkData
     .split("")
-    .map((c) => asciiMap[c.charCodeAt(0)]);
-  return handleHighlightMatches(chunk.Direction, chunkData, asciiEscaped);
+    .map((c) => asciiMap[c.charCodeAt(0)] ?? c);
+  return handleHighlightMatches(
+    chunk.Direction,
+    chunkData,
+    asciiEscaped,
+    props.flagIdMatches[index] ?? [],
+  );
 };
 
 const classes = (chunk: Data) => ({
@@ -576,6 +623,11 @@ function openInCyberChef(chunk: Data) {
 }
 .server :deep(.mark) {
   background-color: #9090ff;
+}
+.chunk :deep(.flag-id) {
+  background-color: #ffd54f;
+  color: #212121;
+  border-radius: 2px;
 }
 .client {
   color: #800000;

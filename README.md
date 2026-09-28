@@ -29,6 +29,12 @@ curl --data-binary @some-file.pcap http://localhost:8080/upload/some-file.pcap
 - Mark interesting streams for team members
 - Easy deployment using Docker or single binary
 
+### Highlighting attack flag IDs
+
+Set `PKAPPA2_ATTACK_JSON_URL` to the HTTP(S) URL of your changing `attack.json`. Set `PKAPPA2_ATTACK_FLAG_IDS_PATH` to the dot-separated path of its flag IDs (default `flag_ids`). The path accepts `*` for every array item or object value; for example, `services.*.flag_ids` selects IDs from every service. Set `PKAPPA2_ATTACK_TICK_DURATION` to the tick length using Go duration syntax, such as `2m` (the default).
+
+Pkappa2 fetches the feed twice per tick. In the stream view, matching data chunks get a Flag ID badge and their IDs are highlighted in the ASCII and UTF-8 views. The view checks for changes automatically. Successful ID changes are saved under `state_dir`, so packets from earlier ticks retain their highlights after a restart. A failed or malformed fetch leaves the last valid IDs in place. The feed URL and IDs are configured on the server and are not stored in the packet index.
+
 ### Searching streams
 Pkappa2 uses a custom query language which allows you to find the exact streams you're interested in.
 The query format supports a list of filters joined using `[AND]|OR|THEN`. Filters follow the format of `key:value` or `key:"value"`. There are different keys including the stream's data and metadata such as host and port, time, and number of bytes transferred. Checkout the Help page in the frontend for more details.
