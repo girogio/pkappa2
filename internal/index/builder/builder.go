@@ -56,7 +56,7 @@ func New(pcapDir, indexDir, snapshotDir string, cachedKnownPcaps []*pcapmetadata
 		}
 		info := cachedKnownPcapsMap[p.Name()]
 		if info == nil || info.Filesize != uint64(pInfo.Size()) {
-			info, _, err = readPackets(pcapDir, p.Name(), nil)
+			info, _, _, err = readPackets(pcapDir, p.Name(), nil, true, nil)
 			if err != nil {
 				log.Printf("error reading pcap %s: %v", p.Name(), err)
 				continue
@@ -95,6 +95,17 @@ func New(pcapDir, indexDir, snapshotDir string, cachedKnownPcaps []*pcapmetadata
 
 func (b *Builder) FromPcap(pcapDir string, pcapFilenames []string, existingIndexes []*index.Reader) (int, uint64, []*index.Reader, *bitmask.LongBitmask, *bitmask.LongBitmask, *bitmask.LongBitmask, error) {
 	log.Printf("Building indexes from pcaps %q\n", pcapFilenames)
+	// Bound retained raw payload bytes across all pcaps in this import. Packet
+	// metadata and reassembled stream data remain available for indexing.
+	const packetPayloadMemoryBudget = 64 << 20
+	remainingPayloadMemory := int64(packetPayloadMemoryBudget)
+	var packetStorages []*packetStorage
+	packetStorageByPcap := make(map[*pcapmetadata.PcapInfo]*packetStorage)
+	defer func() {
+		for _, storage := range packetStorages {
+			storage.Close()
+		}
+	}()
 	// load, find ts of oldest new package
 	newPcapInfos := []*pcapmetadata.PcapInfo(nil)
 	newPackets := []Packet(nil)
@@ -108,7 +119,7 @@ func (b *Builder) FromPcap(pcapDir string, pcapFilenames []string, existingIndex
 				break
 			}
 		}
-		pcapInfo, pcapPackets, err := readPackets(pcapDir, pcapFilename, knownPcapInfo)
+		pcapInfo, pcapPackets, storage, err := readPackets(pcapDir, pcapFilename, knownPcapInfo, false, &remainingPayloadMemory)
 		if err != nil {
 			log.Printf("readPackets(%q) failed: %v", pcapFilename, err)
 			if nProcessedPcaps == 0 {
@@ -120,13 +131,21 @@ func (b *Builder) FromPcap(pcapDir string, pcapFilenames []string, existingIndex
 			// let the next run deal with the problematic pcap...
 			break
 		}
+		if storage != nil {
+			packetStorages = append(packetStorages, storage)
+			packetStorageByPcap[pcapInfo] = storage
+		}
 		log.Printf("Loaded %d packets from pcap file %q\n", len(pcapPackets), pcapFilename)
 		nProcessedPcaps++
 		if len(pcapPackets) == 0 {
 			continue
 		}
 		newPcapInfos = append(newPcapInfos, pcapInfo)
-		newPackets = append(newPackets, pcapPackets...)
+		if len(newPackets) == 0 {
+			newPackets = pcapPackets
+		} else {
+			newPackets = append(newPackets, pcapPackets...)
+		}
 		if oldestTs.IsZero() || oldestTs.After(pcapInfo.PacketTimestampMin) {
 			oldestTs = pcapInfo.PacketTimestampMin
 		}
@@ -222,11 +241,16 @@ outer:
 			pcap := allNeededPcaps[pcapIndex]
 			packets := []Packet(nil)
 			var err error
-			_, packets, err = readPackets(pcapDir, pcap.Filename, pcap)
+			var storage *packetStorage
+			_, packets, storage, err = readPackets(pcapDir, pcap.Filename, pcap, false, &remainingPayloadMemory)
 			if err != nil {
 				// we couldn't load an old pcap that contains packets that we
 				// have to re-evaluate, if we just continue here, we lose data.
 				return 0, 0, nil, nil, nil, nil, err
+			}
+			if storage != nil {
+				packetStorages = append(packetStorages, storage)
+				packetStorageByPcap[pcap] = storage
 			}
 			if bestSnapshot.timestamp.After(pcap.PacketTimestampMin) {
 				packetIndexes := bestSnapshot.referencedPackets[pcap.Filename]
@@ -353,8 +377,14 @@ outer:
 			}
 
 			// process packet with ip, tcp & udp reassemblers
+			var packetErr error
 			func() {
-				parsed := packet.Parsed()
+				pmd := pcapmetadata.FromPacketMetadata(packet.CaptureInfo())
+				parsed, err := packet.Parsed(packetStorageByPcap[pmd.PcapInfo])
+				if err != nil {
+					packetErr = err
+					return
+				}
 				network := parsed.NetworkLayer()
 				if network == nil {
 					return
@@ -430,6 +460,9 @@ outer:
 					// TODO: implement sctp support
 				}
 			}()
+			if packetErr != nil {
+				return 0, 0, nil, nil, nil, nil, packetErr
+			}
 
 			//clear all data associated with the packet
 			*packet = Packet{}
@@ -453,7 +486,7 @@ outer:
 	indexBuilders := []*index.Writer{}
 	if err := func() error {
 		// dump collected streams to new indexes
-		for _, s := range streamFactory.Streams {
+		for streamIndex, s := range streamFactory.Streams {
 			id := nextStreamID
 			streamCategory := &addedStreams
 			touchedByNewPcaps := false
@@ -489,6 +522,7 @@ outer:
 				}
 			}
 			if !touchedByNewPcaps {
+				streamFactory.Streams[streamIndex] = nil
 				continue
 			}
 			if id == nextStreamID {
@@ -513,6 +547,8 @@ outer:
 					break
 				}
 			}
+			// The writer retains packet metadata, not the stream payloads.
+			streamFactory.Streams[streamIndex] = nil
 		}
 		return nil
 	}(); err != nil {
