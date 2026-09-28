@@ -86,9 +86,15 @@ export type StreamData = {
 
 export type AttackFlagMatches = {
   Enabled: boolean;
-  Generation: number;
+  Generation: string;
   PollAfterMillis: number;
   Matches: string[][] | null;
+};
+
+export type AttackFlagSettings = {
+  URL: string;
+  Path: string;
+  TickDuration: string;
 };
 
 /** @see {isStatistics} ts-auto-guard:type-guard */
@@ -215,7 +221,7 @@ const APIClient = {
   async getAttackFlagMatches(
     streamId: number,
     converter: string,
-    generation: number | null,
+    generation: string | null,
   ): Promise<AttackFlagMatches> {
     const response = await this.perform(
       "get",
@@ -226,7 +232,7 @@ const APIClient = {
     const data = response.data as AttackFlagMatches;
     if (
       typeof data?.Enabled !== "boolean" ||
-      typeof data.Generation !== "number" ||
+      typeof data.Generation !== "string" ||
       typeof data.PollAfterMillis !== "number" ||
       (data.Matches !== null &&
         (!Array.isArray(data.Matches) ||
@@ -238,6 +244,33 @@ const APIClient = {
       throw new Error("Unexpected attack flag response");
     }
     return data;
+  },
+  async getAttackFlagSettings(): Promise<AttackFlagSettings> {
+    const response = await this.perform("get", "/attack-flags/config");
+    return this.parseAttackFlagSettings(response.data);
+  },
+  async updateAttackFlagSettings(
+    settings: AttackFlagSettings,
+  ): Promise<AttackFlagSettings> {
+    const response = await this.perform(
+      "put",
+      "/attack-flags/config",
+      JSON.stringify(settings),
+      undefined,
+      { headers: { "Content-Type": "application/json" } },
+    );
+    return this.parseAttackFlagSettings(response.data);
+  },
+  parseAttackFlagSettings(data: unknown): AttackFlagSettings {
+    const value = data as AttackFlagSettings;
+    if (
+      typeof value?.URL !== "string" ||
+      typeof value.Path !== "string" ||
+      typeof value.TickDuration !== "string"
+    ) {
+      throw new Error("Unexpected attack flag settings response");
+    }
+    return value;
   },
   async getStatus() {
     return this.performGuarded("get", `/status.json`, isStatistics);

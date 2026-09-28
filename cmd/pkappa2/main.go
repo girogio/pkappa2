@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"container/ring"
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -66,7 +65,7 @@ var (
 	attackTickDuration = flag.Duration("attack_tick_duration", 2*time.Minute, "Duration of an attack tick; the feed is checked twice per tick")
 )
 
-func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.RWMutex, attackFeed *attackflags.Feed) *chi.Mux {
+func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.RWMutex, attackController *attackflags.Controller) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.SetHeader("Access-Control-Allow-Origin", "*"))
 	r.Use(middleware.SetHeader("Access-Control-Allow-Methods", "*"))
@@ -176,6 +175,41 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 		if err = mgr.SetConfig(config); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+	})
+	rUser.Get("/api/attack-flags/config", func(w http.ResponseWriter, r *http.Request) {
+		settings := attackflags.DefaultSettings()
+		if attackController != nil {
+			settings = attackController.Settings()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(settings); err != nil {
+			log.Printf("encode attack flag settings: %v", err)
+		}
+	})
+	rUser.Put("/api/attack-flags/config", func(w http.ResponseWriter, r *http.Request) {
+		if attackController == nil {
+			http.Error(w, "attack flag configuration unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var settings attackflags.Settings
+		if err := json.Unmarshal(body, &settings); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		settings, err = attackController.Update(settings)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(settings); err != nil {
+			log.Printf("encode attack flag settings: %v", err)
 		}
 	})
 	rUser.Get("/api/status.json", func(w http.ResponseWriter, r *http.Request) {
@@ -486,18 +520,25 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 	rUser.Get(`/api/attack-flags/stream/{stream:\d+}.json`, func(w http.ResponseWriter, r *http.Request) {
 		response := struct {
 			Enabled         bool
-			Generation      int
+			Generation      string
 			PollAfterMillis int64
 			Matches         [][]string
-		}{Enabled: attackFeed != nil}
+		}{PollAfterMillis: (15 * time.Second).Milliseconds(), Matches: [][]string{}}
+		var attackFeed *attackflags.Feed
+		if attackController != nil {
+			var version string
+			var interval time.Duration
+			attackFeed, version, interval = attackController.Current()
+			response.Generation = version
+			response.PollAfterMillis = interval.Milliseconds()
+		}
+		response.Enabled = attackFeed != nil
 		if attackFeed == nil {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
-		response.Generation = attackFeed.Generation()
-		response.PollAfterMillis = attackFeed.PollInterval().Milliseconds()
-		if r.URL.Query().Get("generation") == strconv.Itoa(response.Generation) {
+		if r.URL.Query().Get("generation") == response.Generation {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(response)
 			return
@@ -1126,21 +1167,13 @@ func main() {
 		log.Fatalf("manager.New failed: %v", err)
 	}
 	defer mgr.Close()
-	var attackFeed *attackflags.Feed
-	if *attackJSONURL != "" {
-		attackFeed, err = attackflags.New(attackflags.Config{
-			URL:          *attackJSONURL,
-			Path:         *attackFlagIDsPath,
-			TickDuration: *attackTickDuration,
-			StateDir:     filepath.Join(*baseDir, *stateDir),
-		})
-		if err != nil {
-			log.Fatalf("attack flag feed configuration: %v", err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go attackFeed.Run(ctx)
+	attackController, err := attackflags.NewController(filepath.Join(*baseDir, *stateDir), attackflags.Settings{
+		URL: *attackJSONURL, Path: *attackFlagIDsPath, TickDuration: attackTickDuration.String(),
+	})
+	if err != nil {
+		log.Fatalf("attack flag settings: %v", err)
 	}
+	defer attackController.Close()
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -1186,7 +1219,7 @@ func main() {
 		}()
 	}
 
-	r := setupRouter(mgr, stderrRing, &stderrLock, attackFeed)
+	r := setupRouter(mgr, stderrRing, &stderrLock, attackController)
 
 	server := &http.Server{
 		Addr:    *listenAddress,

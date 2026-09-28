@@ -1,5 +1,9 @@
 <template>
-  <v-dialog v-model="visible" width="500" @keydown.enter="submitCurrent">
+  <v-dialog
+    v-model="visible"
+    width="640"
+    @keydown.enter.prevent="submitCurrent"
+  >
     <v-card>
       <v-card-title>
         <span class="text-h5">CTF Setup Wizards</span>
@@ -12,6 +16,10 @@
         <v-tab value="tab_service_by_port">
           Setup Service ports
           <v-icon>mdi-cloud-outline</v-icon>
+        </v-tab>
+        <v-tab value="tab_attack_flags">
+          Attack flag IDs
+          <v-icon>mdi-flag-variant</v-icon>
         </v-tab>
       </v-tabs>
       <v-tabs-window v-model="tab">
@@ -83,6 +91,61 @@
             </v-card-actions>
           </v-form>
         </v-tabs-window-item>
+        <v-tabs-window-item value="tab_attack_flags">
+          <v-form>
+            <v-card-text>
+              Mark flag IDs from a changing attack.json feed in packet data.
+              Clear the URL and save to disable it. These settings apply to all
+              users immediately.
+              <v-text-field
+                v-model="attackURL"
+                :disabled="attackLoading"
+                class="mt-4"
+                label="Attack JSON URL"
+                placeholder="https://example.org/attack.json"
+                :rules="[() => goodAttackURL || 'Enter an HTTP or HTTPS URL']"
+              ></v-text-field>
+              <v-text-field
+                v-model="attackPath"
+                :disabled="attackLoading"
+                label="Flag ID JSON path"
+                placeholder="services.*.flag_ids"
+                hint="Dot-separated keys; * traverses arrays or objects"
+                persistent-hint
+                :rules="[() => goodAttackPath || 'Enter a valid JSON path']"
+              ></v-text-field>
+              <v-text-field
+                v-model="attackTickDuration"
+                :disabled="attackLoading"
+                label="Tick duration"
+                placeholder="2m"
+                hint="Go duration, for example 30s, 2m, or 1h"
+                persistent-hint
+                :rules="[
+                  () => goodAttackTickDuration || 'Enter a duration such as 2m',
+                ]"
+              ></v-text-field>
+            </v-card-text>
+            <v-card-actions>
+              <v-spacer></v-spacer>
+              <v-btn variant="text" @click="visible = false">Close</v-btn>
+              <v-btn
+                variant="text"
+                :disabled="
+                  !goodAttackURL ||
+                  !goodAttackPath ||
+                  !goodAttackTickDuration ||
+                  attackLoading
+                "
+                :loading="attackLoading"
+                :color="attackError ? 'error' : 'primary'"
+                type="button"
+                @click="saveAttackFlags"
+                >Save attack feed</v-btn
+              >
+            </v-card-actions>
+          </v-form>
+        </v-tabs-window-item>
       </v-tabs-window>
     </v-card>
   </v-dialog>
@@ -93,6 +156,8 @@ import { EventBus } from "./EventBus";
 import { ref, computed } from "vue";
 import { useRootStore } from "@/stores";
 import { randomColor } from "@/lib/colors";
+import APIClient from "@/apiClient";
+import axios from "axios";
 
 const store = useRootStore();
 const visible = ref(false);
@@ -101,6 +166,11 @@ const tab = ref("");
 const flag_regex_loading = ref(false);
 const flag_regex_error = ref(false);
 const flagRegex = ref("");
+const attackURL = ref("");
+const attackPath = ref("flag_ids");
+const attackTickDuration = ref("2m");
+const attackLoading = ref(false);
+const attackError = ref(false);
 
 const service_by_port_loading = ref(false);
 const service_by_port_error = ref(false);
@@ -133,6 +203,22 @@ const goodFlagRegex = computed(() => {
   return true;
 });
 
+const goodAttackURL = computed(() => {
+  if (attackURL.value === "") return true;
+  try {
+    const url = new URL(attackURL.value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+});
+const goodAttackPath = computed(
+  () => attackPath.value !== "" && attackPath.value.split(".").every(Boolean),
+);
+const goodAttackTickDuration = computed(() =>
+  /^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$/.test(attackTickDuration.value),
+);
+
 function openDialog() {
   visible.value = true;
   tab.value = "tab_flag_regex";
@@ -142,6 +228,18 @@ function openDialog() {
 
   service_by_port_loading.value = false;
   service_by_port_error.value = false;
+  attackLoading.value = true;
+  attackError.value = false;
+  APIClient.getAttackFlagSettings()
+    .then((settings) => {
+      attackURL.value = settings.URL;
+      attackPath.value = settings.Path;
+      attackTickDuration.value = settings.TickDuration;
+    })
+    .catch((err: unknown) => EventBus.emit("showError", errorMessage(err)))
+    .finally(() => {
+      attackLoading.value = false;
+    });
 }
 
 function submitCurrent() {
@@ -152,6 +250,46 @@ function submitCurrent() {
     case "tab_service_by_port":
       createService();
       break;
+    case "tab_attack_flags":
+      void saveAttackFlags();
+      break;
+  }
+}
+
+function errorMessage(err: unknown) {
+  if (axios.isAxiosError<string>(err)) {
+    return typeof err.response?.data === "string"
+      ? err.response.data
+      : err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function saveAttackFlags() {
+  if (
+    attackLoading.value ||
+    !goodAttackURL.value ||
+    !goodAttackPath.value ||
+    !goodAttackTickDuration.value
+  )
+    return;
+  attackLoading.value = true;
+  attackError.value = false;
+  try {
+    const settings = await APIClient.updateAttackFlagSettings({
+      URL: attackURL.value,
+      Path: attackPath.value,
+      TickDuration: attackTickDuration.value,
+    });
+    attackURL.value = settings.URL;
+    attackPath.value = settings.Path;
+    attackTickDuration.value = settings.TickDuration;
+    EventBus.emit("showMessage", "Attack flag feed settings saved.");
+  } catch (err) {
+    attackError.value = true;
+    EventBus.emit("showError", errorMessage(err));
+  } finally {
+    attackLoading.value = false;
   }
 }
 

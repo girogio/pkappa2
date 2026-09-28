@@ -31,7 +31,7 @@ curl --data-binary @some-file.pcap http://localhost:8080/upload/some-file.pcap
 
 ### Highlighting attack flag IDs
 
-Set `PKAPPA2_ATTACK_JSON_URL` to the HTTP(S) URL of your changing `attack.json`. Set `PKAPPA2_ATTACK_FLAG_IDS_PATH` to the dot-separated path of its flag IDs (default `flag_ids`). The path accepts `*` for every array item or object value; for example, `services.*.flag_ids` selects IDs from every service. Set `PKAPPA2_ATTACK_TICK_DURATION` to the tick length using Go duration syntax, such as `2m` (the default).
+Open **CTF Setup Wizards** (shown on first use or from the Tags page) and select **Attack flag IDs**. Enter the HTTP(S) URL of your changing `attack.json`, the dot-separated path to its flag IDs, and the tick duration. The path accepts `*` for every array item or object value; for example, `services.*.flag_ids` selects IDs from every service. The default path is `flag_ids` and the default tick duration is `2m`. Saving applies the settings immediately; clearing the URL disables the feed. Environment variables in `.env.example` can provide initial defaults before the wizard is used.
 
 Pkappa2 fetches the feed twice per tick. In the stream view, matching data chunks get a Flag ID badge and their IDs are highlighted in the ASCII and UTF-8 views. The view checks for changes automatically. Successful ID changes are saved under `state_dir`, so packets from earlier ticks retain their highlights after a restart. A failed or malformed fetch leaves the last valid IDs in place. The feed URL and IDs are configured on the server and are not stored in the packet index.
 

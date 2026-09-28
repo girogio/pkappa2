@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/spq/pkappa2/internal/attackflags"
 	"github.com/spq/pkappa2/internal/index/manager"
 )
 
@@ -145,6 +146,47 @@ func TestConfig(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /api/config returned status code %d, want 200", rr.Code)
+	}
+}
+
+func TestAttackFlagSettingsAPI(t *testing.T) {
+	dirs := makeTempdirs(t)
+	mgr := makeManager(t, dirs)
+	defer mgr.Close()
+	controller, err := attackflags.NewController(dirs.state, attackflags.DefaultSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	r := setupRouter(mgr, nil, nil, controller)
+
+	settings := attackflags.Settings{URL: "http://127.0.0.1:8123/attack.json", Path: "services.*.flag_ids", TickDuration: "30s"}
+	body, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/attack-flags/config", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT settings returned %d: %s", rr.Code, rr.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/attack-flags/config", nil)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	var got attackflags.Settings
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != settings {
+		t.Fatalf("GET settings = %+v, want %+v", got, settings)
+	}
+	bad := bytes.NewBufferString(`{"URL":"file:///tmp/attack.json","Path":"flag_ids","TickDuration":"30s"}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/attack-flags/config", bad)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest || controller.Settings() != settings {
+		t.Fatalf("invalid settings response = %d; saved settings = %+v", rr.Code, controller.Settings())
 	}
 }
 

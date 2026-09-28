@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,12 +81,17 @@ func New(config Config) (*Feed, error) {
 	f := &Feed{
 		config: config,
 		client: &http.Client{Timeout: min(10*time.Second, config.TickDuration/2)},
-		file:   filepath.Join(config.StateDir, "attack_flag_ids.jsonl"),
 	}
+	f.file = archiveFilename(config.StateDir, config.URL, config.Path)
 	if err := f.loadIndex(); err != nil {
 		return nil, err
 	}
 	return f, nil
+}
+
+func archiveFilename(stateDir, feedURL, path string) string {
+	key := sha256.Sum256([]byte(feedURL + "\x00" + path))
+	return filepath.Join(stateDir, "attack_flag_ids_"+hex.EncodeToString(key[:8])+".jsonl")
 }
 
 func (f *Feed) PollInterval() time.Duration { return f.config.TickDuration / 2 }
