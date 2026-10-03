@@ -20,6 +20,9 @@ func TestExtract(t *testing.T) {
 		{"flat", `{"flag_ids":["b","a","b"]}`, "flag_ids", []string{"a", "b"}},
 		{"nested", `{"services":[{"flags":{"ids":["red"]}},{"flags":{"ids":["blue"]}}]}`, "services.*.flags.ids", []string{"blue", "red"}},
 		{"map and numbers", `{"flag_ids":{"team_a":["abc",42],"team_b":null}}`, "flag_ids", []string{"42", "abc"}},
+		{"SaarCTF attack JSON", `{"teams":[{"id":1,"ip":"10.42.1.2"}],"flag_ids":{"fooserv":{"10.42.1.2":{"123":["info_flag1","info_flag2"]}},"barserv":{"10.42.1.2":{"123":"info_single"}}}}`, "flag_ids", []string{"info_flag1", "info_flag2", "info_single"}},
+		{"ECSC 2026 attack JSON with default path", `{"teams":[{"id":2,"ip":"10.60.2.2"}],"attack_info":{"fireworx":{"10.60.2.2":{"83":{"0":"first-id"},"84":{"0":null}}},"bambinotes":{"10.60.2.2":{"83":{"0":"second-id"}}}},"current_round":84}`, "flag_ids", []string{"first-id", "second-id"}},
+		{"ECSC 2026 attack JSON with explicit path", `{"attack_info":{"fireworx":{"10.60.2.2":{"83":{"0":"first-id"}}}}}`, "attack_info", []string{"first-id"}},
 		{"array index", `{"ticks":[{"ids":["old"]},{"ids":["new"]}]}`, "ticks.1.ids", []string{"new"}},
 	}
 	for _, tc := range tests {
@@ -56,6 +59,7 @@ func TestFeedRotatesAndRestoresHistoricalIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeFirstFetch := time.Now().Add(-time.Minute)
 	if err := f.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +81,7 @@ func TestFeedRotatesAndRestoresHistoricalIDs(t *testing.T) {
 	}
 	newTime := time.Now()
 	chunks := []index.Data{
+		{Time: beforeFirstFetch, Content: []byte("packet old-flag-id from before setup")},
 		{Time: oldTime, Content: []byte("packet old-flag-id here")},
 		{Time: newTime, Content: []byte("packet new-flag-id here")},
 	}
@@ -84,7 +89,7 @@ func TestFeedRotatesAndRestoresHistoricalIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"old-flag-id"}, {"new-flag-id"}}
+	want := [][]string{{"old-flag-id"}, {"old-flag-id"}, {"new-flag-id"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Match() = %q, want %q", got, want)
 	}

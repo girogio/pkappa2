@@ -189,8 +189,8 @@ func pathParts(path string) ([]string, error) {
 }
 
 // Extract supports dot-separated object keys, numeric array indexes, and *
-// for all object values or array elements. The selected value can be a string
-// or a nested array of strings.
+// for all object values or array elements. The selected value can be a string,
+// or an object or array containing strings.
 func Extract(body []byte, path string) ([]string, error) {
 	parts, err := pathParts(path)
 	if err != nil {
@@ -205,6 +205,18 @@ func Extract(body []byte, path string) ([]string, error) {
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
 		return nil, errors.New("attack JSON must contain exactly one value")
+	}
+	// SaarCTF-style feeds expose flag IDs under flag_ids, while the ECSC 2026
+	// attack feed exposes the same kind of per-service values under attack_info.
+	// Keep existing saved default settings working with either feed shape.
+	if path == "flag_ids" {
+		if object, ok := root.(map[string]any); ok {
+			if _, hasFlagIDs := object["flag_ids"]; !hasFlagIDs {
+				if _, hasAttackInfo := object["attack_info"]; hasAttackInfo {
+					parts = []string{"attack_info"}
+				}
+			}
+		}
 	}
 	values := []any{root}
 	for _, part := range parts {
@@ -366,7 +378,9 @@ func loadSnapshot(file *os.File, entry snapshotIndex) ([]string, error) {
 
 // Match returns the IDs found in each data chunk. A snapshot starts at the
 // time it was fetched and remains valid until the next changed snapshot. The
-// following snapshot is also considered for one poll interval to cover delay.
+// first snapshot also covers older packets, since the feed may be configured
+// after their capture. The following snapshot is considered for one poll
+// interval to cover delay.
 func (f *Feed) Match(data []index.Data) ([][]string, error) {
 	result := make([][]string, len(data))
 	f.mu.RLock()
@@ -401,7 +415,7 @@ func (f *Feed) Match(data []index.Data) ([][]string, error) {
 		if next > 0 {
 			candidates = append(candidates, next-1)
 		}
-		if next < len(entries) && entries[next].at.Sub(at) <= f.PollInterval() {
+		if next == 0 || (next < len(entries) && entries[next].at.Sub(at) <= f.PollInterval()) {
 			candidates = append(candidates, next)
 		}
 		seen := make(map[string]struct{})

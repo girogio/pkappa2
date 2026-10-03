@@ -110,7 +110,7 @@
                 :disabled="attackLoading"
                 label="Flag ID JSON path"
                 placeholder="services.*.flag_ids"
-                hint="Dot-separated keys; * traverses arrays or objects"
+                hint="Dot-separated keys; * traverses arrays or objects. The default also accepts top-level attack_info."
                 persistent-hint
                 :rules="[() => goodAttackPath || 'Enter a valid JSON path']"
               ></v-text-field>

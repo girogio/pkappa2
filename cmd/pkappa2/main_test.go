@@ -190,6 +190,69 @@ func TestAttackFlagSettingsAPI(t *testing.T) {
 	}
 }
 
+func TestAttackFlagMatchesUnchangedGeneration(t *testing.T) {
+	dirs := makeTempdirs(t)
+	mgr := makeManager(t, dirs)
+	defer mgr.Close()
+	feedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"flag_ids":["flag-id"]}`))
+	}))
+	defer feedServer.Close()
+	controller, err := attackflags.NewController(dirs.state, attackflags.Settings{
+		URL: feedServer.URL, Path: "flag_ids", TickDuration: "10s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	r := setupRouter(mgr, nil, nil, controller)
+
+	var generation string
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, generation, _ = controller.Current()
+		if strings.HasSuffix(generation, ":1") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("attack feed did not load")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/attack-flags/stream/1.json?generation="+generation, nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unchanged generation returned %d: %s", rr.Code, rr.Body.String())
+	}
+	var response struct {
+		Enabled bool
+		Matches json.RawMessage
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Enabled || string(response.Matches) != "null" {
+		t.Fatalf("unchanged generation should preserve browser matches, got %+v", response)
+	}
+
+	if _, err := controller.Update(attackflags.DefaultSettings()); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/attack-flags/stream/1.json", nil)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("disabled feed returned %d: %s", rr.Code, rr.Body.String())
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Enabled || string(response.Matches) != "[]" {
+		t.Fatalf("disabled feed should clear browser matches, got %+v", response)
+	}
+}
+
 func TestStatus(t *testing.T) {
 	dirs := makeTempdirs(t)
 	mgr := makeManager(t, dirs)

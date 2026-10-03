@@ -523,7 +523,7 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 			Generation      string
 			PollAfterMillis int64
 			Matches         [][]string
-		}{PollAfterMillis: (15 * time.Second).Milliseconds(), Matches: [][]string{}}
+		}{PollAfterMillis: (15 * time.Second).Milliseconds()}
 		var attackFeed *attackflags.Feed
 		if attackController != nil {
 			var version string
@@ -534,6 +534,7 @@ func setupRouter(mgr *manager.Manager, stderrRing *ring.Ring, stderrLock *sync.R
 		}
 		response.Enabled = attackFeed != nil
 		if attackFeed == nil {
+			response.Matches = [][]string{}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(response)
 			return
