@@ -52,6 +52,26 @@ func syncFlagIDTag(ctx context.Context, mgr *manager.Manager, feed *attackflags.
 		if err != nil {
 			return err
 		}
+		if !found {
+			converted, err := stream.CachedConverterData()
+			if err != nil {
+				log.Printf("sync native flag_id tag: read converted stream %d: %v", id, err)
+				retry = append(retry, id)
+				if _, ok := previous[id]; ok {
+					matches[id] = struct{}{}
+				}
+				return nil
+			}
+			for _, chunks := range converted {
+				found, err = matcher.HasMatch(chunks)
+				if err != nil {
+					return err
+				}
+				if found {
+					break
+				}
+			}
+		}
 		if found {
 			matches[id] = struct{}{}
 		} else {
@@ -81,7 +101,7 @@ func syncFlagIDTag(ctx context.Context, mgr *manager.Manager, feed *attackflags.
 		}
 		if err == nil && since != nil {
 			err = v.AllStreams(ctx, func(stream manager.StreamContext) error {
-				if stream.Stream().LastPacket().Before(*since) {
+				if stream.Stream().LastPacket().Before(*since) && !stream.HasCachedConverterData() {
 					return nil
 				}
 				if _, ok := dirty[stream.Stream().ID()]; ok {
@@ -157,10 +177,13 @@ func runFlagIDTag(ctx context.Context, mgr *manager.Manager, controller *attackf
 			if !ok {
 				return
 			}
-			if event.Type == "pcapProcessed" {
+			switch event.Type {
+			case "pcapProcessed", "converterCompleted":
 				for _, id := range event.ChangedStreamIDs {
 					dirty[id] = struct{}{}
 				}
+			case "converterAdded", "converterDeleted", "converterRestarted":
+				full = true
 			}
 		case <-ticker.C:
 		}

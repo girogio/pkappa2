@@ -71,6 +71,15 @@ func (cache *CachedConverter) Contains(streamID uint64) bool {
 	return cache.cacheFile.Contains(streamID)
 }
 
+// CachedData reads a converted stream without starting a converter process.
+func (cache *CachedConverter) CachedData(stream *index.Stream) ([]index.Data, bool, error) {
+	data, _, _, err := cache.cacheFile.Data(stream)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, data != nil, nil
+}
+
 func (cache *CachedConverter) Data(stream *index.Stream, moreDetails bool) (data []index.Data, clientBytes, serverBytes uint64, wasCached bool, err error) {
 	// See if the stream data is cached already.
 	data, clientBytes, serverBytes, err = cache.cacheFile.Data(stream)

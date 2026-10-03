@@ -636,6 +636,18 @@ func (mgr *Manager) invalidateTags(updatedStreams, resetStreams, addedStreams bi
 	mgr.inheritTagUncertainty()
 }
 
+func streamIDsFromMask(mask bitmask.LongBitmask) []uint64 {
+	ids := make([]uint64, 0, mask.OnesCount())
+	for wordIndex, word := range mask.Mask() {
+		for word != 0 {
+			bit := bits.TrailingZeros64(word)
+			ids = append(ids, uint64(wordIndex*64+bit))
+			word &= word - 1
+		}
+	}
+	return ids
+}
+
 func (mgr *Manager) importPcapJob(filenames []string, nextStreamID uint64, existingIndexes []*index.Reader, existingIndexesReleaser indexReleaser) {
 	processedFiles, usedNewStreamIDs, createdIndexes, updatedStreams, resetStreams, addedStreams, err := mgr.builder.FromPcap(mgr.PcapDir, filenames, existingIndexes)
 	if err != nil {
@@ -686,21 +698,11 @@ func (mgr *Manager) importPcapJob(filenames []string, nextStreamID uint64, exist
 		if err := mgr.saveState(); err != nil {
 			log.Printf("importPcapJob(%q) failed to save state file: %s", filenames, err)
 		}
+		changed := updatedStreams.OrCopy(*resetStreams)
+		changed.Or(*addedStreams)
 		mgr.event(Event{
-			Type: "pcapProcessed",
-			ChangedStreamIDs: func() []uint64 {
-				changed := updatedStreams.OrCopy(*resetStreams)
-				changed.Or(*addedStreams)
-				ids := make([]uint64, 0, changed.OnesCount())
-				for wordIndex, word := range changed.Mask() {
-					for word != 0 {
-						bit := bits.TrailingZeros64(word)
-						ids = append(ids, uint64(wordIndex*64+bit))
-						word &= word - 1
-					}
-				}
-				return ids
-			}(),
+			Type:             "pcapProcessed",
+			ChangedStreamIDs: streamIDsFromMask(changed),
 			PcapStats: &PcapStatistics{
 				PcapCount:         len(mgr.builder.KnownPcaps()),
 				ImportJobCount:    len(mgr.importJobs),
@@ -1669,8 +1671,9 @@ func (mgr *Manager) convertStreamJob(allConverters []*converters.CachedConverter
 			}
 			mgr.updatedStreamsDuringTaggingJob.Or(*allStreamIDs[i])
 			mgr.event(Event{
-				Type:      "converterCompleted",
-				Converter: converter.Statistics(),
+				Type:             "converterCompleted",
+				ChangedStreamIDs: streamIDsFromMask(*allStreamIDs[i]),
+				Converter:        converter.Statistics(),
 			})
 		}
 		mgr.inheritTagUncertainty()
@@ -2734,17 +2737,56 @@ func (c StreamContext) Data(converterName string) ([]index.Data, error) {
 	data, _, _, wasCached, err := converter.Data(c.Stream(), true)
 	// only send event if the data wasn't cached before
 	if err == nil && !wasCached {
+		streamID := c.Stream().ID()
 		c.v.mgr.jobs <- func() {
 			converter, ok := c.v.mgr.converters[converterName]
 			if ok {
 				c.v.mgr.event(Event{
-					Type:      "converterCompleted",
-					Converter: converter.Statistics(),
+					Type:             "converterCompleted",
+					ChangedStreamIDs: []uint64{streamID},
+					Converter:        converter.Statistics(),
 				})
 			}
 		}
 	}
 	return data, err
+}
+
+// HasCachedConverterData reports whether any converter has produced output
+// for this stream. It does not start a conversion.
+func (c StreamContext) HasCachedConverterData() bool {
+	if c.s == nil || c.v == nil {
+		return false
+	}
+	for _, converter := range c.v.converters {
+		if cache, ok := converter.(*converters.CachedConverter); ok && cache.Contains(c.s.ID()) {
+			return true
+		}
+	}
+	return false
+}
+
+// CachedConverterData returns available converted output without starting
+// converter processes. A later converterCompleted event can trigger a rescan.
+func (c StreamContext) CachedConverterData() ([][]index.Data, error) {
+	if c.s == nil || c.v == nil {
+		return nil, fmt.Errorf("stream not found")
+	}
+	var result [][]index.Data
+	for _, converter := range c.v.converters {
+		cache, ok := converter.(*converters.CachedConverter)
+		if !ok {
+			continue
+		}
+		data, cached, err := cache.CachedData(c.s)
+		if err != nil {
+			return nil, err
+		}
+		if cached {
+			result = append(result, data)
+		}
+	}
+	return result, nil
 }
 
 func (c StreamContext) HasTag(name string) (bool, error) {
