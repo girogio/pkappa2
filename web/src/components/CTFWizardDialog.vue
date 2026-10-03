@@ -95,9 +95,9 @@
           <v-form>
             <v-card-text>
               Mark flag IDs from a changing attack.json feed in packet data and
-              make matching streams searchable with the flag_id tag.
-              Clear the URL and save to disable it. These settings apply to all
-              users immediately.
+              make matching streams searchable with the flag_id tag. Clear the
+              URL and save to disable it. These settings apply to all users
+              immediately.
               <v-text-field
                 v-model="attackURL"
                 :disabled="attackLoading"

@@ -112,7 +112,7 @@ All command line options can be specified using environment variables.
 - Build the frontend: `yarn && yarn build` in `/web`
     - Optionally, install stock converter python dependencies: `pip install -r converters/pkappa2lib/requirements.txt`
     - Only required to use the converter views
-- Run `go run cmd/pkappa2/main.go` in `/`
+- Run `go run ./cmd/pkappa2` in `/`
 - Visit http://localhost:8080/ in your web browser
 
 You likely want to add some arguments to the `go run` command, check `-help`
@@ -210,7 +210,7 @@ Add the `localhost:4200` endpoint in pkappa2 on the `Manage PCAP-over-IP` page a
 
 - Build the frontend once (`yarn build`) to be able to run pkappa2
 - Run `yarn dev` in `/web`
-- Run `go run cmd/pkappa2/main.go -address :8081` in `/`
+- Run `go run ./cmd/pkappa2 -address :8081` in `/`
 - Visit http://localhost:8080/ in your web browser
 - Enjoy frontend development using hot-reloading changes
 - Use `yarn lint && yarn type-check && yarn format` before commiting your changes

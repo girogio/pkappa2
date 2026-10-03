@@ -45,7 +45,7 @@ jobs:
         run: sudo apt-get install -y libpcap-dev
 
       - name: Build
-        run: go build -v ./cmd/pkappa2/main.go
+        run: go build -v ./cmd/pkappa2
 
       - name: Test with the Go CLI
         run: go test -v ./...

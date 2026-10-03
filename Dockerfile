@@ -16,7 +16,7 @@ RUN go mod download
 
 COPY ./ ./
 COPY --from=frontend_builder /app/dist ./web/dist
-RUN go build -o ./bin/pkappa2 ./cmd/pkappa2/main.go
+RUN go build -o ./bin/pkappa2 ./cmd/pkappa2
 
 # Run
 FROM ubuntu:latest

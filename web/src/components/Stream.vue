@@ -107,7 +107,10 @@
       </v-menu>
       <v-tooltip location="bottom">
         <template #activator="{ props }">
-          <v-btn icon :href="`${publicBase}api/download/${streamId}.pcap`" v-bind="props"
+          <v-btn
+            icon
+            :href="`${publicBase}api/download/${streamId}.pcap`"
+            v-bind="props"
             ><v-icon>mdi-download</v-icon></v-btn
           >
         </template>
