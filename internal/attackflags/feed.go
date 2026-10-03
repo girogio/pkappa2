@@ -383,6 +383,9 @@ func loadSnapshot(file *os.File, entry snapshotIndex) ([]string, error) {
 // interval to cover delay.
 func (f *Feed) Match(data []index.Data) ([][]string, error) {
 	result := make([][]string, len(data))
+	for i := range result {
+		result[i] = []string{}
+	}
 	f.mu.RLock()
 	entries := slices.Clone(f.index)
 	f.mu.RUnlock()

@@ -2,6 +2,7 @@ package attackflags
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -83,15 +84,23 @@ func TestFeedRotatesAndRestoresHistoricalIDs(t *testing.T) {
 	chunks := []index.Data{
 		{Time: beforeFirstFetch, Content: []byte("packet old-flag-id from before setup")},
 		{Time: oldTime, Content: []byte("packet old-flag-id here")},
+		{Time: oldTime, Content: []byte("packet with no matching ID")},
 		{Time: newTime, Content: []byte("packet new-flag-id here")},
 	}
 	got, err := f.Match(chunks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"old-flag-id"}, {"old-flag-id"}, {"new-flag-id"}}
+	want := [][]string{{"old-flag-id"}, {"old-flag-id"}, {}, {"new-flag-id"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Match() = %q, want %q", got, want)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `[["old-flag-id"],["old-flag-id"],[],["new-flag-id"]]` {
+		t.Fatalf("Match() JSON contains a null chunk: %s", encoded)
 	}
 	restored, err := New(config)
 	if err != nil {
