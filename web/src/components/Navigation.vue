@@ -163,6 +163,7 @@
                     <v-list-item-title>Details</v-list-item-title>
                   </v-list-item>
                   <v-list-item
+                    v-if="!tag.Managed"
                     :disabled="tag.Definition == '...'"
                     prepend-icon="mdi-form-textbox"
                     link
@@ -171,6 +172,7 @@
                     <v-list-item-title>Use Query</v-list-item-title>
                   </v-list-item>
                   <v-list-item
+                    v-if="!tag.Managed"
                     prepend-icon="mdi-palette"
                     link
                     @click="showTagColorChangeDialog(tag.Name)"
@@ -178,6 +180,7 @@
                     <v-list-item-title>Change Color</v-list-item-title>
                   </v-list-item>
                   <v-list-item
+                    v-if="!tag.Managed"
                     prepend-icon="mdi-rename-outline"
                     link
                     @click="showTagNameChangeDialog(tag.Name)"
@@ -185,6 +188,7 @@
                     <v-list-item-title>Change Name</v-list-item-title>
                   </v-list-item>
                   <v-list-item
+                    v-if="!tag.Managed"
                     prepend-icon="mdi-text-search-variant"
                     link
                     @click="showTagDefinitionChangeDialog(tag.Name)"
@@ -192,6 +196,7 @@
                     <v-list-item-title>Change Definition</v-list-item-title>
                   </v-list-item>
                   <v-list-item
+                    v-if="!tag.Managed"
                     prepend-icon="mdi-file-replace-outline"
                     link
                     @click="showTagSetConvertersDialog(tag.Name)"
@@ -199,6 +204,7 @@
                     <v-list-item-title>Attach converter</v-list-item-title>
                   </v-list-item>
                   <v-list-item
+                    v-if="!tag.Managed"
                     prepend-icon="mdi-delete-outline"
                     link
                     :disabled="tag.Referenced"
@@ -414,7 +420,8 @@ onMounted(() => {
   store
     .updateTags()
     .then(() => {
-      if (store.tags?.length === 0) EventBus.emit("showCTFWizard");
+      if (store.tags?.every((tag) => tag.Managed))
+        EventBus.emit("showCTFWizard");
     })
     .catch((err: Error) => {
       EventBus.emit("showError", `Failed to update tags: ${err.message}`);

@@ -51,7 +51,11 @@
             </td>
             <td>
               <div class="tag_definition" :title="tag.Definition">
-                {{ tag.Definition }}
+                {{
+                  tag.Managed
+                    ? "Attack flag IDs from the configured feed"
+                    : tag.Definition
+                }}
               </div>
             </td>
             <td>
@@ -96,7 +100,7 @@
                 </template>
                 <span>Use Query</span>
               </v-tooltip>
-              <v-tooltip location="bottom">
+              <v-tooltip v-if="!tag.Managed" location="bottom">
                 <template #activator="{ props }">
                   <v-btn
                     variant="plain"
@@ -109,7 +113,7 @@
                 </template>
                 <span>Change Color</span>
               </v-tooltip>
-              <v-tooltip location="bottom">
+              <v-tooltip v-if="!tag.Managed" location="bottom">
                 <template #activator="{ props }">
                   <v-btn
                     variant="plain"
@@ -123,7 +127,7 @@
                 </template>
                 <span>Change Name</span>
               </v-tooltip>
-              <v-tooltip location="bottom">
+              <v-tooltip v-if="!tag.Managed" location="bottom">
                 <template #activator="{ props }">
                   <v-btn
                     variant="plain"
@@ -136,7 +140,7 @@
                 </template>
                 <span>Change Definition</span>
               </v-tooltip>
-              <v-tooltip location="bottom">
+              <v-tooltip v-if="!tag.Managed" location="bottom">
                 <template #activator="{ props }">
                   <v-btn
                     variant="plain"
@@ -149,7 +153,7 @@
                 </template>
                 <span>Attach Converter</span>
               </v-tooltip>
-              <v-tooltip location="bottom">
+              <v-tooltip v-if="!tag.Managed" location="bottom">
                 <template #activator="{ props }">
                   <v-btn
                     variant="plain"

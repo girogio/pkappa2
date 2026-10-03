@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -187,6 +188,41 @@ func TestAttackFlagSettingsAPI(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest || controller.Settings() != settings {
 		t.Fatalf("invalid settings response = %d; saved settings = %+v", rr.Code, controller.Settings())
+	}
+}
+
+func TestNativeFlagIDTagCreatedWithoutFeed(t *testing.T) {
+	dirs := makeTempdirs(t)
+	mgr := makeManager(t, dirs)
+	defer mgr.Close()
+	controller, err := attackflags.NewController(dirs.state, attackflags.DefaultSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runFlagIDTag(ctx, mgr, controller)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		tags := mgr.ListTags()
+		if len(tags) == 1 && tags[0].Name == "tag/flag_id" {
+			if tags[0].MatchingCount != 0 {
+				t.Fatalf("disabled feed matched %d streams", tags[0].MatchingCount)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("native flag ID tag was not created: %+v", tags)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

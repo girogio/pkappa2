@@ -265,6 +265,7 @@ export function isTagInfo(obj: unknown): obj is TagInfo {
         typeof typedObj["MatchingCount"] === "number" &&
         typeof typedObj["UncertainCount"] === "number" &&
         typeof typedObj["Referenced"] === "boolean" &&
+        typeof typedObj["Managed"] === "boolean" &&
         Array.isArray(typedObj["Converters"]) &&
         typedObj["Converters"].every((e: any) =>
             typeof e === "string"

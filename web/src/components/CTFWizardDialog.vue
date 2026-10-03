@@ -94,7 +94,8 @@
         <v-tabs-window-item value="tab_attack_flags">
           <v-form>
             <v-card-text>
-              Mark flag IDs from a changing attack.json feed in packet data.
+              Mark flag IDs from a changing attack.json feed in packet data and
+              make matching streams searchable with the flag_id tag.
               Clear the URL and save to disable it. These settings apply to all
               users immediately.
               <v-text-field

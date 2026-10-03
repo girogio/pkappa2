@@ -95,6 +95,7 @@ type (
 	tag struct {
 		query.TagDetails
 		definition   string
+		nativeFlagID bool
 		features     query.FeatureSet
 		color        string
 		converters   []*converters.CachedConverter
@@ -108,6 +109,7 @@ type (
 		UncertainCount uint
 		Referenced     bool
 		Converters     []string
+		Managed        bool
 	}
 	Manager struct {
 		StateDir     string
@@ -181,11 +183,12 @@ type (
 	stateFile struct {
 		Saved time.Time
 		Tags  []struct {
-			Name       string
-			Definition string
-			Matches    []uint64
-			Color      string
-			Converters []string
+			Name         string
+			Definition   string
+			Matches      []uint64
+			Color        string
+			Converters   []string
+			NativeFlagID bool
 		}
 		Pcaps                    []*pcapmetadata.PcapInfo
 		PcapProcessorWebhookUrls []string
@@ -352,9 +355,17 @@ nextStateFile:
 					Conditions: q.Conditions,
 				},
 				definition:   t.Definition,
+				nativeFlagID: t.NativeFlagID,
 				features:     q.Conditions.Features(),
 				color:        t.Color,
 				referencedBy: make(map[string]struct{}),
+			}
+			if t.NativeFlagID {
+				if t.Name != "tag/flag_id" {
+					log.Printf("Invalid native flag ID tag %q in statefile %q", t.Name, fn)
+					continue nextStateFile
+				}
+				nt.Uncertain = bitmask.LongBitmask{}
 			}
 			if strings.HasPrefix(t.Name, "mark/") || strings.HasPrefix(t.Name, "generated/") {
 				ids, ok := q.Conditions.StreamIDs(mgr.nextStreamID)
@@ -529,17 +540,19 @@ func (mgr *Manager) saveState() error {
 	}
 	for n, t := range mgr.tags {
 		j.Tags = append(j.Tags, struct {
-			Name       string
-			Definition string
-			Matches    []uint64
-			Color      string
-			Converters []string
+			Name         string
+			Definition   string
+			Matches      []uint64
+			Color        string
+			Converters   []string
+			NativeFlagID bool
 		}{
-			Name:       n,
-			Definition: t.definition,
-			Matches:    t.Matches.Mask(),
-			Color:      t.color,
-			Converters: t.converterNames(),
+			Name:         n,
+			Definition:   t.definition,
+			Matches:      t.Matches.Mask(),
+			Color:        t.color,
+			Converters:   t.converterNames(),
+			NativeFlagID: t.nativeFlagID,
 		})
 	}
 	fn := tools.MakeFilename(mgr.StateDir, "state.json")
@@ -930,7 +943,7 @@ func makeTagInfo(name string, t *tag) *TagInfo {
 	m := t.Matches.Copy()
 	m.Sub(t.Uncertain)
 	definition := t.definition
-	if _, _, mark := parseTagName(name); mark {
+	if _, _, mark := parseTagName(name); mark || t.nativeFlagID {
 		definition = "..."
 	}
 	return &TagInfo{
@@ -941,6 +954,7 @@ func makeTagInfo(name string, t *tag) *TagInfo {
 		UncertainCount: uint(t.Uncertain.OnesCount()),
 		Referenced:     len(t.referencedBy) != 0,
 		Converters:     t.converterNames(),
+		Managed:        t.nativeFlagID,
 	}
 }
 
@@ -960,6 +974,72 @@ func (mgr *Manager) ListTags() []TagInfo {
 	return <-c
 }
 
+// SetFlagIDMatches publishes the feed's time-aware matches as a native tag.
+// The stream IDs are derived from the feed's exact per-chunk matching, while
+// the ID query lets the regular search and tag machinery use the result.
+func (mgr *Manager) SetFlagIDMatches(streamIDs []uint64) error {
+	const name = "tag/flag_id"
+	ids := slices.Clone(streamIDs)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	b := strings.Builder{}
+	b.WriteString("id:")
+	if len(ids) == 0 {
+		b.WriteString("-1")
+	} else {
+		for i, id := range ids {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprint(&b, id)
+		}
+	}
+	definition := b.String()
+	q, err := query.Parse(definition)
+	if err != nil {
+		return err
+	}
+	matches := bitmask.LongBitmask{}
+	for _, id := range ids {
+		matches.Set(uint(id))
+	}
+	c := make(chan error, 1)
+	mgr.jobs <- func() {
+		old, exists := mgr.tags[name]
+		if exists && !old.nativeFlagID {
+			c <- fmt.Errorf("%s already exists as a user tag", name)
+			return
+		}
+		if exists && old.Matches.Equal(matches) && old.Uncertain.IsZero() {
+			c <- nil
+			return
+		}
+		t := &tag{
+			TagDetails: query.TagDetails{Matches: matches, Conditions: q.Conditions},
+			definition: definition, nativeFlagID: true,
+			features: q.Conditions.Features(), color: "#ffb300",
+			referencedBy: make(map[string]struct{}),
+		}
+		if exists {
+			t.color = old.color
+			t.referencedBy = old.referencedBy
+			t.converters = old.converters
+			t.Uncertain = mgr.allStreams
+		}
+		mgr.tags[name] = t
+		if exists {
+			mgr.inheritTagUncertainty()
+			t.Uncertain = bitmask.LongBitmask{}
+			mgr.startTaggingJobIfNeeded()
+			mgr.updatedTagsToSignal[name] = struct{}{}
+		} else {
+			mgr.event(Event{Type: "tagAdded", Tag: makeTagInfo(name, t)})
+		}
+		c <- mgr.saveState()
+	}
+	return <-c
+}
+
 func parseTagName(fullName string) (typ, name string, isMark bool) {
 	ok := false
 	typ, name, ok = strings.Cut(fullName, "/")
@@ -974,6 +1054,9 @@ func parseTagName(fullName string) (typ, name string, isMark bool) {
 }
 
 func (mgr *Manager) AddTag(name, color, queryString string) error {
+	if name == "tag/flag_id" {
+		return errors.New("tag/flag_id is reserved for attack flag ID detection")
+	}
 	typ, sub, isMark := parseTagName(name)
 	if typ == "" {
 		return errors.New("invalid tag name (need a 'tag/', 'service/', 'mark/' or 'generated/' prefix)")
@@ -1056,6 +1139,9 @@ func (mgr *Manager) DelTag(name string) error {
 			tag, ok := mgr.tags[name]
 			if !ok {
 				return fmt.Errorf("unknown tag %q", name)
+			}
+			if tag.nativeFlagID {
+				return errors.New("tag/flag_id is managed by the attack flag feed")
 			}
 			if len(tag.referencedBy) != 0 {
 				return fmt.Errorf("tag %q still references the tag to be deleted", slices.AppendSeq(make([]string, 0, len(tag.referencedBy)), maps.Keys(tag.referencedBy))[0])
@@ -1195,6 +1281,9 @@ func (mgr *Manager) UpdateTag(name string, operation UpdateTagOperation) error {
 			if !ok {
 				return fmt.Errorf("unknown tag %q", name)
 			}
+			if tag.nativeFlagID {
+				return errors.New("tag/flag_id is managed by the attack flag feed")
+			}
 			if info.color != "" {
 				tag.color = info.color
 			}
@@ -1332,6 +1421,9 @@ func (mgr *Manager) UpdateTag(name string, operation UpdateTagOperation) error {
 				mgr.startConverterJobIfNeeded()
 			}
 			if info.name != "" {
+				if info.name == "tag/flag_id" {
+					return errors.New("tag/flag_id is reserved for attack flag ID detection")
+				}
 				oldTyp, _, _ := parseTagName(name)
 				newTyp, newSub, _ := parseTagName(info.name)
 				if newTyp != oldTyp {

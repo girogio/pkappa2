@@ -176,6 +176,7 @@ export type TagInfo = {
   UncertainCount: number;
   Referenced: boolean;
   Converters: string[];
+  Managed: boolean;
 };
 
 /** @see {isTagsResponse} ts-auto-guard:type-guard */

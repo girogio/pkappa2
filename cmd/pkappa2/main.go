@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"container/ring"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -1175,12 +1176,24 @@ func main() {
 		log.Fatalf("attack flag settings: %v", err)
 	}
 	defer attackController.Close()
+	flagIDContext, stopFlagIDTag := context.WithCancel(context.Background())
+	flagIDTagDone := make(chan struct{})
+	go func() {
+		defer close(flagIDTagDone)
+		runFlagIDTag(flagIDContext, mgr, attackController)
+	}()
+	defer func() {
+		stopFlagIDTag()
+		<-flagIDTagDone
+	}()
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signals
 		log.Println("Interrupt received. Cleaning up...")
+		stopFlagIDTag()
+		<-flagIDTagDone
 		mgr.Close()
 		os.Exit(1)
 	}()

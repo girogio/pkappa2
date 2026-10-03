@@ -274,6 +274,54 @@ func TestTags(t *testing.T) {
 	}
 }
 
+func TestNativeFlagIDTagSearchAndRestart(t *testing.T) {
+	dirs := makeTempdirs(t)
+	mgr := makeManager(t, dirs)
+	importSomePackets(t, mgr, t1, "pcapProcessed")
+	if err := mgr.SetFlagIDMatches([]uint64{2, 0, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.ListTags(); len(got) != 1 || got[0].Name != "tag/flag_id" || !got[0].Managed || got[0].MatchingCount != 2 {
+		t.Fatalf("native flag ID tag = %+v", got)
+	}
+	if err := mgr.AddTag("tag/flag_id", "red", "id:1"); err == nil {
+		t.Fatal("reserved flag ID tag can be replaced")
+	}
+	checkSearch := func(want []uint64) {
+		t.Helper()
+		q, err := query.Parse("tag:flag_id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := mgr.GetView()
+		defer v.Release()
+		var got []uint64
+		_, _, _, err = v.SearchStreams(context.Background(), q, func(s StreamContext) error {
+			got = append(got, s.Stream().ID())
+			return nil
+		}, Limit(100, 0), PrefetchAllTags())
+		if err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Fatalf("tag:flag_id returned %v, want %v", got, want)
+		}
+	}
+	checkSearch([]uint64{0, 2})
+	if err := mgr.SetFlagIDMatches([]uint64{1}); err != nil {
+		t.Fatal(err)
+	}
+	checkSearch([]uint64{1})
+	mgr.Close()
+	mgr = makeManager(t, dirs)
+	defer mgr.Close()
+	if !mgr.ListTags()[0].Managed {
+		t.Fatal("native flag ID tag lost its managed status after restart")
+	}
+	checkSearch([]uint64{1})
+}
+
 func TestManagerRestartKeepsState(t *testing.T) {
 	dirs := makeTempdirs(t)
 	mgr := makeManager(t, dirs)

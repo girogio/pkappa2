@@ -37,7 +37,11 @@
           </v-row>
           <v-row no-gutters>
             <v-col
-              ><code>{{ tag.Definition }}</code></v-col
+              ><code>{{
+                tag.Managed
+                  ? "Attack flag IDs from the configured feed"
+                  : tag.Definition
+              }}</code></v-col
             >
           </v-row>
         </v-container>
