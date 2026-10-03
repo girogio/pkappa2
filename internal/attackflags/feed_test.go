@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -42,6 +43,59 @@ func TestExtract(t *testing.T) {
 	}
 	if _, err := Extract([]byte(`{"flag_ids":[true]}`), "flag_ids"); err == nil {
 		t.Fatal("unexpected ID type should fail")
+	}
+}
+
+func TestMatcherReusesSnapshotsAndReportsChangedTime(t *testing.T) {
+	stateDir := t.TempDir()
+	config := Config{URL: "http://example.invalid/attack.json", Path: "flag_ids", TickDuration: 10 * time.Second, StateDir: stateDir}
+	first := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	records := []snapshot{
+		{At: first, IDs: []string{"old-id"}},
+		{At: first.Add(10 * time.Second), IDs: []string{"new-id"}},
+	}
+	var archive []byte
+	for _, record := range records {
+		line, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive = append(append(archive, line...), '\n')
+	}
+	if err := os.WriteFile(archiveFilename(stateDir, config.URL, config.Path), archive, 0600); err != nil {
+		t.Fatal(err)
+	}
+	feed, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := feed.ChangedSince(1); !ok || !at.Equal(records[1].At) {
+		t.Fatalf("ChangedSince(1) = %v, %v", at, ok)
+	}
+	data := []index.Data{
+		{Time: first.Add(-time.Minute), Content: []byte("old-id")},
+		{Time: first.Add(7 * time.Second), Content: []byte("new-id")},
+		{Time: first.Add(11 * time.Second), Content: []byte("new-id")},
+		{Time: first.Add(11 * time.Second), Content: []byte("no match")},
+	}
+	matcher, err := feed.NewMatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer matcher.Close()
+	got, err := matcher.Match(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"old-id"}, {"new-id"}, {"new-id"}, {}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Matcher.Match = %q, want %q", got, want)
+	}
+	for i, chunk := range data {
+		found, err := matcher.HasMatch([]index.Data{chunk})
+		if err != nil || found != (len(want[i]) != 0) {
+			t.Fatalf("Matcher.HasMatch(chunk %d) = %v, %v", i, found, err)
+		}
 	}
 }
 

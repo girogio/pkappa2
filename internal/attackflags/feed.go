@@ -28,6 +28,7 @@ import (
 const maxResponseBytes = 8 << 20
 const maxIDs = 10000
 const maxIDBytes = 512
+const matcherCacheSize = 8
 
 type Config struct {
 	URL          string
@@ -59,6 +60,16 @@ type Feed struct {
 	current  []string
 	etag     string
 	modified string
+}
+
+// Matcher is a snapshot of the feed for matching multiple streams. It keeps
+// the archive open and reuses loaded ID sets for the duration of a scan.
+type Matcher struct {
+	feed    *Feed
+	entries []snapshotIndex
+	file    *os.File
+	cache   map[int][]string
+	order   []int
 }
 
 func New(config Config) (*Feed, error) {
@@ -100,6 +111,18 @@ func (f *Feed) Generation() int {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return len(f.index)
+}
+
+// ChangedSince returns the first snapshot added after generation. Callers can
+// revisit packets from one poll interval before that time; older packets have
+// the same candidate IDs as before.
+func (f *Feed) ChangedSince(generation int) (time.Time, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if generation < 0 || generation >= len(f.index) {
+		return time.Time{}, false
+	}
+	return f.index[generation].at, true
 }
 
 func (f *Feed) Run(ctx context.Context) {
@@ -382,48 +405,107 @@ func loadSnapshot(file *os.File, entry snapshotIndex) ([]string, error) {
 // after their capture. The following snapshot is considered for one poll
 // interval to cover delay.
 func (f *Feed) Match(data []index.Data) ([][]string, error) {
+	m, err := f.NewMatcher()
+	if err != nil {
+		return nil, err
+	}
+	defer m.Close()
+	return m.Match(data)
+}
+
+func (f *Feed) NewMatcher() (*Matcher, error) {
+	f.mu.RLock()
+	entries := slices.Clone(f.index)
+	f.mu.RUnlock()
+	m := &Matcher{feed: f, entries: entries, cache: make(map[int][]string)}
+	if len(entries) != 0 {
+		file, err := os.Open(f.file)
+		if err != nil {
+			return nil, err
+		}
+		m.file = file
+	}
+	return m, nil
+}
+
+func (m *Matcher) Close() error {
+	if m.file != nil {
+		return m.file.Close()
+	}
+	return nil
+}
+
+func (m *Matcher) ids(n int) ([]string, error) {
+	if ids, ok := m.cache[n]; ok {
+		for i, cached := range m.order {
+			if cached == n {
+				m.order = append(m.order[:i], m.order[i+1:]...)
+				break
+			}
+		}
+		m.order = append(m.order, n)
+		return ids, nil
+	}
+	ids, err := loadSnapshot(m.file, m.entries[n])
+	if err == nil {
+		if len(m.order) == matcherCacheSize {
+			delete(m.cache, m.order[0])
+			m.order = m.order[1:]
+		}
+		m.cache[n] = ids
+		m.order = append(m.order, n)
+	}
+	return ids, err
+}
+
+func (m *Matcher) candidates(at time.Time) []int {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	next := sort.Search(len(m.entries), func(n int) bool { return m.entries[n].at.After(at) })
+	candidates := make([]int, 0, 2)
+	if next > 0 {
+		candidates = append(candidates, next-1)
+	}
+	if next == 0 || (next < len(m.entries) && m.entries[next].at.Sub(at) <= m.feed.PollInterval()) {
+		candidates = append(candidates, next)
+	}
+	return candidates
+}
+
+// HasMatch stops at the first ID found, which is sufficient for the stream tag.
+func (m *Matcher) HasMatch(data []index.Data) (bool, error) {
+	for _, chunk := range data {
+		for _, n := range m.candidates(chunk.Time) {
+			ids, err := m.ids(n)
+			if err != nil {
+				return false, err
+			}
+			for _, id := range ids {
+				if bytes.Contains(chunk.Content, []byte(id)) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func (m *Matcher) Match(data []index.Data) ([][]string, error) {
 	result := make([][]string, len(data))
 	for i := range result {
 		result[i] = []string{}
 	}
-	f.mu.RLock()
-	entries := slices.Clone(f.index)
-	f.mu.RUnlock()
-	if len(entries) == 0 {
+	if len(m.entries) == 0 {
 		return result, nil
 	}
-	file, err := os.Open(f.file)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	cache := make(map[int][]string)
-	read := func(n int) ([]string, error) {
-		if ids, ok := cache[n]; ok {
-			return ids, nil
-		}
-		ids, err := loadSnapshot(file, entries[n])
-		if err == nil {
-			cache[n] = ids
-		}
-		return ids, err
-	}
 	for i, chunk := range data {
-		at := chunk.Time
-		if at.IsZero() {
-			at = time.Now()
-		}
-		next := sort.Search(len(entries), func(n int) bool { return entries[n].at.After(at) })
-		candidates := make([]int, 0, 2)
-		if next > 0 {
-			candidates = append(candidates, next-1)
-		}
-		if next == 0 || (next < len(entries) && entries[next].at.Sub(at) <= f.PollInterval()) {
-			candidates = append(candidates, next)
-		}
 		seen := make(map[string]struct{})
-		for _, n := range candidates {
-			ids, err := read(n)
+		for _, n := range m.candidates(chunk.Time) {
+			ids, err := m.ids(n)
 			if err != nil {
 				return nil, err
 			}

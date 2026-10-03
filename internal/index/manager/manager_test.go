@@ -322,6 +322,29 @@ func TestNativeFlagIDTagSearchAndRestart(t *testing.T) {
 	checkSearch([]uint64{1})
 }
 
+func TestPcapProcessedReportsChangedStreamIDs(t *testing.T) {
+	dirs := makeTempdirs(t)
+	mgr := makeManager(t, dirs)
+	defer mgr.Close()
+	events, stop := mgr.Listen()
+	defer stop()
+	importSomePackets(t, mgr, t1, "")
+	for {
+		select {
+		case event := <-events:
+			if event.Type != "pcapProcessed" {
+				continue
+			}
+			if want := []uint64{0, 1, 2, 3}; !slices.Equal(event.ChangedStreamIDs, want) {
+				t.Fatalf("changed stream IDs = %v, want %v", event.ChangedStreamIDs, want)
+			}
+			return
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for pcapProcessed")
+		}
+	}
+}
+
 func TestManagerRestartKeepsState(t *testing.T) {
 	dirs := makeTempdirs(t)
 	mgr := makeManager(t, dirs)

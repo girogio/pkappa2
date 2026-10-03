@@ -10,6 +10,7 @@ import (
 	"log"
 	"maps"
 	"math"
+	"math/bits"
 	"net"
 	"net/http"
 	"os"
@@ -61,6 +62,7 @@ type (
 
 	Event struct {
 		Type                string
+		ChangedStreamIDs    []uint64                  `json:"-"`
 		Tag                 *TagInfo                  `json:",omitempty"`
 		Tags                []*TagInfo                `json:",omitempty"`
 		Converter           *converters.Statistics    `json:",omitempty"`
@@ -686,6 +688,19 @@ func (mgr *Manager) importPcapJob(filenames []string, nextStreamID uint64, exist
 		}
 		mgr.event(Event{
 			Type: "pcapProcessed",
+			ChangedStreamIDs: func() []uint64 {
+				changed := updatedStreams.OrCopy(*resetStreams)
+				changed.Or(*addedStreams)
+				ids := make([]uint64, 0, changed.OnesCount())
+				for wordIndex, word := range changed.Mask() {
+					for word != 0 {
+						bit := bits.TrailingZeros64(word)
+						ids = append(ids, uint64(wordIndex*64+bit))
+						word &= word - 1
+					}
+				}
+				return ids
+			}(),
 			PcapStats: &PcapStatistics{
 				PcapCount:         len(mgr.builder.KnownPcaps()),
 				ImportJobCount:    len(mgr.importJobs),
