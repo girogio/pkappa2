@@ -2,6 +2,7 @@
 FROM node:24-alpine AS frontend_builder
 RUN apk add --no-cache git
 WORKDIR /app
+ARG PKAPPA2_WEB_BASE=/
 COPY ./web/ /app
 RUN yarn install --frozen-lockfile && yarn build
 

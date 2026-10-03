@@ -120,6 +120,13 @@ You likely want to add some arguments to the `go run` command, check `-help`
 ### Reverse proxy
 You can add a reverse proxy in front of pkappa2 to add TLS encryption or other options. Here is a nginx config which includes the `/ws` Websocket endpoint. You can bind the port to 127.0.0.1 in the docker-compose.yml to not expose the internal server when using a reverse proxy.
 
+To serve pkappa2 under a path such as `/pkappa2/`, set
+`PKAPPA2_WEB_BASE=/pkappa2/` in `.env` and rebuild the image with
+`docker compose up -d --build`. The value is used when building the frontend;
+the backend still serves `/api`, `/ws`, and `/upload` internally. Configure the
+reverse proxy to strip `/pkappa2` before forwarding requests to pkappa2. The
+default base is `/`, so normal root deployments need no change.
+
 ```
 server {
     listen 80;

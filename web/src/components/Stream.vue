@@ -107,7 +107,7 @@
       </v-menu>
       <v-tooltip location="bottom">
         <template #activator="{ props }">
-          <v-btn icon :href="`/api/download/${streamId}.pcap`" v-bind="props"
+          <v-btn icon :href="`${publicBase}api/download/${streamId}.pcap`" v-bind="props"
             ><v-icon>mdi-download</v-icon></v-btn
           >
         </template>
@@ -441,6 +441,7 @@ import { CYBERCHEF_URL } from "@/lib/constants";
 import APIClient from "@/apiClient";
 
 const store = useRootStore();
+const publicBase = import.meta.env.BASE_URL;
 const route = useRoute();
 const router = useRouter();
 const presentation = ref("ascii");

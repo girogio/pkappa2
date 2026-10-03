@@ -2,6 +2,8 @@ services:
   pkappa2:
     build:
       context: .
+      args:
+        PKAPPA2_WEB_BASE: ${PKAPPA2_WEB_BASE:-/}
       network: host
       entitlements:
         - network.host

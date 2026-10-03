@@ -20,7 +20,7 @@ import {
 } from "./apiClient.guard";
 
 const client = axios.create({
-  baseURL: "/api/",
+  baseURL: `${import.meta.env.BASE_URL}api/`,
 });
 
 type SideInfo = {
@@ -300,7 +300,7 @@ const APIClient = {
     }
     return this.perform("post", url, file, undefined, {
       auth,
-      baseURL: "/",
+      baseURL: import.meta.env.BASE_URL,
       headers: { "Content-Type": "application/octet-stream" },
       onUploadProgress: (progressEvent: AxiosProgressEvent) => {
         if (onProgress && progressEvent.total) {

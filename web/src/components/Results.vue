@@ -303,7 +303,7 @@
                 </td>
                 <td style="width: 0" class="px-0">
                   <v-btn
-                    :href="`/api/download/${stream.Stream.ID}.pcap`"
+                    :href="`${publicBase}api/download/${stream.Stream.ID}.pcap`"
                     icon="mdi-download"
                     variant="plain"
                     density="compact"
@@ -346,6 +346,7 @@ import { getContrastTextColor } from "@/lib/colors";
 import prettyBytes from "pretty-bytes";
 
 const store = useRootStore();
+const publicBase = import.meta.env.BASE_URL;
 const route = useRoute();
 const router = useRouter();
 const streams = useStreamsStore();

@@ -34,7 +34,7 @@
         ><v-btn
           variant="plain"
           density="compact"
-          :href="`/api/download/pcap/${item.Filename}`"
+          :href="`${publicBase}api/download/pcap/${item.Filename}`"
           icon
         >
           <v-icon>mdi-download</v-icon>
@@ -233,6 +233,7 @@ import { formatDate, formatDateLong } from "@/filters";
 import prettyBytes from "pretty-bytes";
 
 const store = useRootStore();
+const publicBase = import.meta.env.BASE_URL;
 const headers = [
   {
     title: "File Name",

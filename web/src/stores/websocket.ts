@@ -98,7 +98,7 @@ export function setupWebsocket() {
   let reconnectTimeout = 125;
   const connect = () => {
     const l = window.location;
-    const url = `ws${l.protocol.slice(4)}//${l.host}/ws`;
+    const url = `ws${l.protocol.slice(4)}//${l.host}${import.meta.env.BASE_URL}ws`;
     const ws = new WebSocket(url);
     ws.onopen = () => {
       reconnectTimeout = 125;

@@ -14,7 +14,7 @@ import ResultsLayout from "./components/ResultsLayout.vue";
 import Stream from "./components/Stream.vue";
 
 export default createRouter({
-  history: createWebHashHistory(),
+  history: createWebHashHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: "/",
